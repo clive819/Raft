@@ -1,12 +1,8 @@
 from collections import namedtuple
 
 
-LEADER = 'leader'
-FOLLOWER = 'follower'
-CANDIDATE = 'candidate'
+LEADER = 'Leader'
+FOLLOWER = 'Follower'
+CANDIDATE = 'Candidate'
 
-
-RPC = namedtuple('RPC', ['term', 'id', 'command', 'index', 'data'])
-
-
-
+RPC = namedtuple('RPC', ['term', 'id', 'state', 'command', 'index', 'data'])
