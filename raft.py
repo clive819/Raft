@@ -1,4 +1,5 @@
 from utils import *
+from time import time
 import tkinter as tk
 import threading
 import socket
@@ -10,16 +11,19 @@ import json
 
 class Raft(object):
     def __init__(self):
+        self.firstTime = True
         self.id = str(uuid.uuid1()).split('-')[0]
         self.socket = None
         self.bufferSize = 4096
         self.port = 8888
         self.multicastGroup = '224.224.224.224'
-        self.timeout = random.uniform(5, 10)
+        self.timeout = random.uniform(2, 3)
         self.heartBeatInterval = 1
         self.listenThread = None
-        self.knownServer = set()
-        self.lock = threading.Lock()
+        self.knownServer = {}
+        self.logLock = threading.Lock()
+        self.checkVoteLock = threading.Lock()
+        self.voteLock = threading.Lock()
 
         # MARK: - UI
         self.window = None
@@ -35,12 +39,12 @@ class Raft(object):
         self.votes = set()
 
     def log(self, message):
-        self.lock.acquire()
+        self.logLock.acquire()
         self.logEntry.config(state=tk.NORMAL)
         self.logEntry.insert(tk.END, f'{message}\n')
         self.logEntry.see(tk.END)
         self.logEntry.config(state=tk.DISABLED)
-        self.lock.release()
+        self.logLock.release()
 
     def multicast(self, rpc):
         if self.socket is not None:
@@ -52,26 +56,34 @@ class Raft(object):
             if rpc.id == self.id:
                 return None
 
-            self.knownServer.add(rpc.id)
+            self.knownServer[rpc.id] = time()
+            self.knownServer[self.id] = time()
             if rpc.term > self.term:
                 self.term = rpc.term
                 self.becomeFollower()
 
             if self.state == FOLLOWER and rpc.state != FOLLOWER:
                 if rpc.state == LEADER:
-                    if rpc.command == 'append' and rpc.data:
+                    if rpc.command == AppendEntry and rpc.data:
                         self.log('Ok')
                         self.database.update(rpc.data)
                     elif 'to ' in rpc.command and self.id == rpc.command.split(' ')[-1]:
                         self.log('Got it, thanks!')
                         self.database.update(rpc.data)
-
+                    elif rpc.command == UpdateServerList:
+                        self.knownServer.update(rpc.data)
+                    self.multicast(RPC(self.term, self.id, self.state, AppendEntry, len(self.database), ''))
                     if len(self.database) < rpc.index:
                         self.log("Hey, I'm missing some data")
-                        self.multicast(RPC(self.term, self.id, self.state, 'miss', len(self.database), ''))
+                        self.multicast(RPC(self.term, self.id, self.state, MissingData, len(self.database), ''))
                 else:
-                    if rpc.command == 'vote' and self.voteFor is None:
-                        self.multicast(RPC(self.term, self.id, self.state, f'vote for {rpc.id}', len(self.database), ''))
+                    if rpc.command == Vote:
+                        self.voteLock.acquire()
+                        if self.voteFor is None:
+                            self.voteFor = rpc.id
+                            self.multicast(RPC(self.term, self.id, self.state, f'vote for {rpc.id}', len(self.database), ''))
+                        self.voteLock.release()
+
             elif self.state == CANDIDATE:
                 if 'vote for ' in rpc.command and self.id == rpc.command.split(' ')[-1]:
                     self.log(f'Collect vote from {rpc.id}')
@@ -79,14 +91,9 @@ class Raft(object):
                 elif rpc.state == LEADER:
                     self.becomeFollower()
             elif self.state == LEADER:
-                if rpc.state == FOLLOWER:
-                    if rpc.command == 'append' and rpc.data:
-                        self.database.update(rpc.data)
-                        self.log('Everyone update ur database')
-                        self.multicast(RPC(self.term, self.id, self.state, 'append', len(self.database), rpc.data))
-                    elif rpc.command == 'miss':
-                        self.log('Ok, sending it to u')
-                        self.multicast(RPC(self.term, self.id, self.state, f'to {rpc.id}', len(self.database), self.database))
+                if rpc.state == FOLLOWER and rpc.command == MissingData:
+                    self.log('Ok, sending it to u')
+                    self.multicast(RPC(self.term, self.id, self.state, f'to {rpc.id}', len(self.database), self.database))
 
     def listen(self):
         while self.socket is not None:
@@ -100,7 +107,7 @@ class Raft(object):
     def sendHeartBeat(self):
         clock = threading.Event()
         while self.state == LEADER:
-            self.multicast(RPC(self.term, self.id, self.state, 'append', len(self.database), ''))
+            self.multicast(RPC(self.term, self.id, self.state, UpdateServerList, len(self.database), self.knownServer))
             clock.wait(self.heartBeatInterval)
 
     def becomeFollower(self):
@@ -122,20 +129,26 @@ class Raft(object):
         self.votes.clear()
         self.votes.add(self.id)
         self.log('Vote me please 0.0')
-        self.multicast(RPC(self.term, self.id, self.state, 'vote', len(self.database), ''))
+        self.multicast(RPC(self.term, self.id, self.state, Vote, len(self.database), ''))
         threading.Thread(target=self.checkVotes, daemon=True).start()
 
     def checkVotes(self):
         while self.state == CANDIDATE:
-            if len(self.votes) >= (len(self.knownServer) // 2):
+            self.checkVoteLock.acquire()
+            count = 0
+            for key in self.knownServer:
+                if (time() - self.knownServer[key]) < 10:
+                    count += 1
+            if len(self.votes) >= (count // 2) and self.state == CANDIDATE:
                 self.becomeLeader()
+            self.checkVoteLock.release()
 
     def commit(self):
         if self.keyEntry is not None:
             data = {self.keyEntry.get(): self.valEntry.get()}
             if self.state == LEADER:
                 self.database.update(data)
-            self.multicast(RPC(self.term, self.id, self.state, 'append', len(self.database), data))
+            self.multicast(RPC(self.term, self.id, self.state, AppendEntry, len(self.database), data))
 
     def retrieveFroKey(self):
         key = self.keyEntry.get()
@@ -145,6 +158,7 @@ class Raft(object):
             val = 'No Match'
         self.valEntry.delete(0, tk.END)
         self.valEntry.insert(0, val)
+        self.log(f'Key: {key}\nValue: {val}')
 
     def updateWindowTitle(self):
         self.log(f'State: {self.state}')
@@ -168,7 +182,9 @@ class Raft(object):
                 self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
                 self.socket.settimeout(self.timeout)
-                self.becomeFollower()
+                if self.firstTime:
+                    self.becomeFollower()
+                    self.firstTime = False
 
                 self.listenThread = threading.Thread(target=self.listen, daemon=True)
                 self.listenThread.start()
