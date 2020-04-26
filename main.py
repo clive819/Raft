@@ -23,7 +23,7 @@ if __name__ == '__main__':
     valEntry = tk.Entry(master=window, width=10)
     valEntry.grid(row=1, column=1, pady=5, sticky='nsew')
 
-    sendBtn = tk.Button(master=window, text='Send', command=raft.appendKeyVal)
+    sendBtn = tk.Button(master=window, text='Send', command=raft.commit)
     sendBtn.grid(row=1, column=2, padx=5, pady=5, sticky='nsew')
 
     retrieveBtn = tk.Button(master=window, text='Retrieve', command=raft.retrieveFroKey)

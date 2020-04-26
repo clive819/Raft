@@ -26,7 +26,8 @@ class Raft(object):
         self.valEntry = None
 
         # MARK: - raft
-        self.state = ServerState.Follower
+        self.leaderID = None
+        self.state = FOLLOWER
         self.term = -1
         self.voteFor = None
         self.database = {}
@@ -39,17 +40,20 @@ class Raft(object):
 
     def multicast(self, rpc):
         if self.socket is not None:
-            pass
-            # self.socket.sendto(json.dumps(d).encode(), (self.multicastGroup, self.port))
+            self.socket.sendto(json.dumps(rpc).encode(), (self.multicastGroup, self.port))
 
-    def decodeMessage(self, data):
-        # TODO: handle request e.g. heartbeat, RPC
-        # MARK: - test
-        if data:
-            data = data.decode()
-            data = json.loads(data)
-            if data['id'] != self.id:
-                self.log(data)
+    def decodeMessage(self, rpc):
+        if rpc:
+            rpc = json.loads(rpc.decode())
+            if rpc.id == self.id:
+                return None
+
+            if self.state == FOLLOWER:
+                pass
+            elif self.state == CANDIDATE:
+                pass
+            else:
+                pass
 
     def listen(self):
         while self.socket is not None:
@@ -59,9 +63,10 @@ class Raft(object):
                 t.start()
             except socket.timeout:
                 if self.socket is not None:
-                    if self.state == ServerState.Follower:
+                    self.voteFor = None
+                    if self.state == FOLLOWER:
                         self.becomeCandidate()
-                    elif self.state == ServerState.Candidate:
+                    elif self.state == CANDIDATE:
                         # FIXME
                         pass
 
@@ -72,23 +77,24 @@ class Raft(object):
         pass
 
     def becomeFollower(self):
-        self.state = ServerState.Follower
+        self.state = FOLLOWER
         self.updateWindowTitle()
-        self.voteFor = None
         self.term += 1
         # FIXME
 
     def becomeLeader(self):
-        self.state = ServerState.Leader
+        self.state = LEADER
         self.updateWindowTitle()
+        self.term += 1
         # FIXME
 
     def becomeCandidate(self):
-        self.state = ServerState.Candidate
+        self.state = CANDIDATE
         self.updateWindowTitle()
+        self.term += 1
         # FIXME
 
-    def appendKeyVal(self):
+    def commit(self):
         # TODO: check state
         if self.keyEntry is not None:
             pass
@@ -100,11 +106,16 @@ class Raft(object):
             # self.multicast(d)
 
     def retrieveFroKey(self):
-        pass
+        key = self.keyEntry.get()
+        if key in self.database:
+            val = self.database[key]
+        else:
+            val = 'No Match'
+        self.valEntry.configure(text=val)
 
     def updateWindowTitle(self):
-        self.log(f'State: {self.state.value}')
-        self.window.title(f'{self.state.value} - {self.id.split("-")[0]}')
+        self.log(f'State: {self.state}')
+        self.window.title(f'{self.state} - {self.id.split("-")[0]}')
 
     def toggleServer(self, *args):
         window, keyEntry, valEntry, toggleBtn, log = args
