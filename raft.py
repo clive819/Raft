@@ -53,7 +53,7 @@ class Raft(object):
 
     def decodeMessage(self, rpc):
         if rpc:
-            rpc = RPC._make(json.loads(rpc.decode()))
+            rpc = RPC._make(json.loads(rpc))
             if rpc.id == self.id:
                 return None
 
