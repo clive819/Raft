@@ -140,7 +140,7 @@ class Raft(object):
             self.checkVoteLock.acquire()
             count = 0
             for key in self.knownServer:
-                if (time() - self.knownServer[key]) < 10:
+                if (time() - self.knownServer[key]) < self.timeout * 2:
                     count += 1
             if len(self.votes) >= (count // 2) and self.state == CANDIDATE:
                 self.becomeLeader()
