@@ -71,7 +71,7 @@ class Raft(object):
                         self.database.update(rpc.data)
                     elif 'to ' in rpc.command and self.id == rpc.command.split(' ')[-1]:
                         self.log('Got it, thanks!')
-                        self.index += 1
+                        self.index = rpc.index
                         self.database.update(rpc.data)
                     elif rpc.command == UpdateServerList:
                         self.knownServer.update(rpc.data)
